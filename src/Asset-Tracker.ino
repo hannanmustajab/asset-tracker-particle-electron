@@ -178,6 +178,7 @@ void loop() {
 		  awake = ((t.clearAccelInterrupt() & LIS3DH_INT1_SRC_IA) != 0);
       waitUntil(PublishDelayFunction);
 		  Particle.publish("WokeUP",String(awake),PRIVATE);
+      t.updateGPS();
       state = REPORTING_STATE;
 
     break;
