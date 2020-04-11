@@ -66,6 +66,7 @@ const int resetDelayTime = 30000;                                               
 const unsigned long TIME_PUBLISH_BATTERY_SEC = 4 * 60 * 60;                       // every 4 hours, send a battery update
 const uint8_t movementThreshold = 16;
 unsigned long stateTime = 0;
+const unsigned long WAIT_FOR_GPS_FIX = 4000 * 10 * 10 ; // After publish, wait 4 seconds for data to go out
 
 
 
@@ -111,15 +112,15 @@ void loop() {
     case TEMPERATURE_SENSING:
       
       if (verboseMode && oldState != state) transitionState(); 
-      t.updateGPS();
-      TemperatureInC = sht31.readTemperature();
-      snprintf(temperatureString,sizeof(temperatureString), "%4.1fC",temperatureInC);
-      if (temperatureInC > temperatureThresholdValue){
-        waitUntil(PublishDelayFunction);
-        Particle.publish("Alert","Temperature Above Threshold",PRIVATE);
-        state = REPORTING_STATE;
-        break;
-      }
+      // t.updateGPS();
+      // TemperatureInC = sht31.readTemperature();
+      // snprintf(temperatureString,sizeof(temperatureString), "%4.1fC",temperatureInC);
+      // if (temperatureInC > temperatureThresholdValue){
+      //   waitUntil(PublishDelayFunction);
+      //   Particle.publish("Alert","Temperature Above Threshold",PRIVATE);
+      //   state = REPORTING_STATE;
+      //   break;
+      // }
 
       if (!t.setupLowPowerWakeMode(movementThreshold)) {
       Particle.publish("Alert","accelerometer not found",PRIVATE);
@@ -134,15 +135,20 @@ void loop() {
 
     case REPORTING_STATE:
       if (verboseMode && oldState != state) transitionState();  
-      
-      if (Time.hour() == 12) Particle.syncTime();                                 // SET CLOCK EACH DAY AT 12 NOON.  
+      Particle.publish("reporting state","syncing clock",PRIVATE);
+      if (Time.hour() == 12) Particle.syncTime();                                 // SET CLOCK EACH DAY AT 12 NOON. 
+      Particle.publish("Getting GPS FIX",String(t.gpsFix()),PRIVATE);
+      while (!t.gpsFix()){
+        t.gpsFix();
+      }
+       Particle.publish("GPS STATUS",String(t.gpsFix()),PRIVATE);
       if (t.gpsFix()){
         sendUBIDots();
+        state = RESPONSE_WAIT;
       } 
       else {
-        waitUntil(PublishDelayFunction)
+        waitUntil(PublishDelayFunction);
         Particle.publish("Alert","GPS NOT FIXED",PRIVATE);
-        state = ERROR_STATE;
         break;
       }
       
@@ -242,13 +248,18 @@ void transitionState(void) {                                                    
 
 void sendUBIDots()                                                                // Function that sends the JSON payload to Ubidots
 {
+  t.updateGPS();
+  if (t.gpsFix()){
+    
+    char data[512];
+    Particle.publish("Air-Quality-Hook", "Entered Send UbiDots function", PRIVATE);
+    snprintf(data, sizeof(data), "{\"position\": {\"value\":1, \"context\":{\"lat\": \"%f\", \"lng\": \"%f\"}}}", t.readLat(), t.readLon());
+    Particle.publish("assest-tracker-webhook", data, PRIVATE);
+    waitUntil(PublishDelayFunction);                                  // Space out the sends
+    inTransit = true;
+
+  }
   
-  char data[512];
-  Particle.publish("Air-Quality-Hook", "Entered Send UbiDots function", PRIVATE);
-  snprintf(data, sizeof(data), "{\"position\": {\"value\":1, \"context\":{\"lat\": \"%f\", \"lng\": \"%f\"}}}", t.readLat(), t.readLon());
-  Particle.publish("assest-tracker-webhook", data, PRIVATE);
-  waitUntil(PublishDelayFunction);                                  // Space out the sends
-  inTransit = true;
 }
 
 void UbidotsHandler(const char *event, const char *data)                          // Looks at the response from Ubidots - Will reset Photon if no successful response

@@ -11,7 +11,7 @@
  * Date: 7th April 2020
  */
 
-// v1.00 - Got the metering working, tested with sensor - viable code
+// v1.00 - Libraries setup and tested sleeping
 
 
 void setup();
@@ -36,7 +36,7 @@ Adafruit_SHT31 sht31 = Adafruit_SHT31();                                        
 
 // Global objects
 FuelGauge batteryMonitor;
-AssetTracker t;
+AssetTracker t = AssetTracker();
 
 SYSTEM_THREAD(ENABLED);
 
@@ -80,6 +80,7 @@ const int resetDelayTime = 30000;                                               
 const unsigned long TIME_PUBLISH_BATTERY_SEC = 4 * 60 * 60;                       // every 4 hours, send a battery update
 const uint8_t movementThreshold = 16;
 unsigned long stateTime = 0;
+const unsigned long WAIT_FOR_GPS_FIX = 4000 * 10 * 10 ; // After publish, wait 4 seconds for data to go out
 
 
 
@@ -93,10 +94,11 @@ void setup() {
   Particle.variable("Battery", batteryString);                                    // Battery level in V as the Argon does not have a fuel cell
 
   t.begin();                                                                      // Start the tracker 
+  t.gpsOn();
   if (! sht31.begin(0x44)) {                                                      // *** This has to be above takemeasurements() Set to 0x45 for alternate i2c addr
     Serial.println("Couldn't find SHT31");
   }
-  t.gpsOn();
+  
   state = ONLINE_WAIT_STATE;                                                    // Set the state to IDLE state 
 }
 
@@ -107,9 +109,10 @@ void loop() {
     case ONLINE_WAIT_STATE:
       
       if (verboseMode && oldState != state) transitionState();
-
+      
       if (Particle.connected()) 
       {
+      t.updateGPS();
 			state = TEMPERATURE_SENSING;
 		  }
 		  if (millis() - stateTime > 5000) {
@@ -123,31 +126,47 @@ void loop() {
     case TEMPERATURE_SENSING:
       
       if (verboseMode && oldState != state) transitionState(); 
-      t.updateGPS();
-      TemperatureInC = sht31.readTemperature();
-      if (temperatureInC > temperatureThresholdValue){
-        waitUntil(PublishDelayFunction);
-        Particle.publish("Alert","Temperature Above Threshold",PRIVATE);
-        state = REPORTING_STATE;
-        break;
-      }
+      // t.updateGPS();
+      // TemperatureInC = sht31.readTemperature();
+      // snprintf(temperatureString,sizeof(temperatureString), "%4.1fC",temperatureInC);
+      // if (temperatureInC > temperatureThresholdValue){
+      //   waitUntil(PublishDelayFunction);
+      //   Particle.publish("Alert","Temperature Above Threshold",PRIVATE);
+      //   state = REPORTING_STATE;
+      //   break;
+      // }
 
       if (!t.setupLowPowerWakeMode(movementThreshold)) {
-			Serial.println("accelerometer not found");
+      Particle.publish("Alert","accelerometer not found",PRIVATE);
 			state = NAPPING_STATE;
 			break;
 		  }
+
+      state = REPORTING_STATE;
 
     break;
 
 
     case REPORTING_STATE:
       if (verboseMode && oldState != state) transitionState();  
+      Particle.publish("reporting state","syncing clock",PRIVATE);
+      if (Time.hour() == 12) Particle.syncTime();                                 // SET CLOCK EACH DAY AT 12 NOON. 
+      Particle.publish("Getting GPS FIX",String(t.gpsFix()),PRIVATE);
+      while (!t.gpsFix()){
+        t.gpsFix();
+      }
+       Particle.publish("GPS STATUS",String(t.gpsFix()),PRIVATE);
+      if (t.gpsFix()){
+        sendUBIDots();
+        state = RESPONSE_WAIT;
+      } 
+      else {
+        waitUntil(PublishDelayFunction);
+        Particle.publish("Alert","GPS NOT FIXED",PRIVATE);
+        break;
+      }
       
-      if (Time.hour() == 12) Particle.syncTime();                                 // SET CLOCK EACH DAY AT 12 NOON.  
-      if (t.gpsFix()) sendUBIDots();
-      
-      state = RESPONSE_WAIT;
+     
     break;
 
     case RESPONSE_WAIT:
@@ -179,6 +198,7 @@ void loop() {
 		  awake = ((t.clearAccelInterrupt() & LIS3DH_INT1_SRC_IA) != 0);
       waitUntil(PublishDelayFunction);
 		  Particle.publish("WokeUP",String(awake),PRIVATE);
+      t.updateGPS();
       state = REPORTING_STATE;
 
     break;
@@ -242,13 +262,18 @@ void transitionState(void) {                                                    
 
 void sendUBIDots()                                                                // Function that sends the JSON payload to Ubidots
 {
+  t.updateGPS();
+  if (t.gpsFix()){
+    
+    char data[512];
+    Particle.publish("Air-Quality-Hook", "Entered Send UbiDots function", PRIVATE);
+    snprintf(data, sizeof(data), "{\"position\": {\"value\":1, \"context\":{\"lat\": \"%f\", \"lng\": \"%f\"}}}", t.readLat(), t.readLon());
+    Particle.publish("assest-tracker-webhook", data, PRIVATE);
+    waitUntil(PublishDelayFunction);                                  // Space out the sends
+    inTransit = true;
+
+  }
   
-  char data[512];
-  Particle.publish("Air-Quality-Hook", "Entered Send UbiDots function", PRIVATE);
-  snprintf(data, sizeof(data), "{\"position\": {\"value\":1, \"context\":{\"lat\": \"%f\", \"lng\": \"%f\"}}}", t.readLat(), t.readLon());
-  Particle.publish("assest-tracker-webhook", data, PRIVATE);
-  waitUntil(PublishDelayFunction);                                  // Space out the sends
-  inTransit = true;
 }
 
 void UbidotsHandler(const char *event, const char *data)                          // Looks at the response from Ubidots - Will reset Photon if no successful response
