@@ -52,7 +52,7 @@ char speedString[16];                                                           
 
 
 // Variables releated to the sensors
-bool verboseMode = true;                                                         // Variable VerboseMode.
+bool verboseMode = true;                                                          // Variable VerboseMode.
 float temperatureInC = 0;                                                         // Current Temp Reading global variable
 float voltage;                                                                    // Voltage level of the LiPo battery - 3.6-4.2V range
 float TemperatureInC = 0;                                                         // last sent temperature reading
@@ -81,11 +81,12 @@ void setup() {
 
   t.begin();                                                                      // Start the tracker 
   t.gpsOn();
+  t.antennaExternal();
   if (! sht31.begin(0x44)) {                                                      // *** This has to be above takemeasurements() Set to 0x45 for alternate i2c addr
     Serial.println("Couldn't find SHT31");
   }
   
-  state = ONLINE_WAIT_STATE;                                                    // Set the state to IDLE state 
+  state = ONLINE_WAIT_STATE;                                                      // Set the state to ONLINE_WAIT_STATE state 
 }
 
 void loop() {
@@ -138,8 +139,9 @@ void loop() {
       Particle.publish("reporting state","syncing clock",PRIVATE);
       if (Time.hour() == 12) Particle.syncTime();                                 // SET CLOCK EACH DAY AT 12 NOON. 
       Particle.publish("Getting GPS FIX",String(t.gpsFix()),PRIVATE);
+      t.updateGPS();
       while (!t.gpsFix()){
-        t.gpsFix();
+        t.getSatellites();
       }
        Particle.publish("GPS STATUS",String(t.gpsFix()),PRIVATE);
       if (t.gpsFix()){
